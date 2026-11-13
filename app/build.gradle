@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'it.bugnenno.anonimizzatore'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'it.bugnenno.anonimizzatore'
+        minSdk 29          // Android 10+
+        targetSdk 34
+        // il numero di versione cresce a ogni build automatica su GitHub
+        versionCode (project.findProperty('buildNumber') ?: '1') as int
+        versionName "1.0.${project.findProperty('buildNumber') ?: '0'}"
+    }
+
+    // Chiave fissa: così ogni nuovo APK si installa SOPRA il precedente
+    // senza dover disinstallare. È una chiave personale, non per il Play Store.
+    signingConfigs {
+        personale {
+            storeFile file('release.keystore')
+            storePassword 'anonimo123'
+            keyAlias 'anonimizzatore'
+            keyPassword 'anonimo123'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.personale
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.webkit:webkit:1.11.0'
+    implementation 'androidx.core:core:1.13.1'
+}

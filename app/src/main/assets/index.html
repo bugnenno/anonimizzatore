@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anonimizzatore documenti</title>
+<script src="lib/pdf.min.js"></script>
+<script src="lib/pdf.worker.min.js"></script>
+<script src="lib/jszip.min.js"></script>
+<script src="lib/jspdf.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#f6f5f1; --card:#fff; --ink:#1d1d1b; --muted:#6b6a65; --line:#e3e1da;
+    --accent:#2f5d50; --accent-ink:#fff; --warn:#8a5a00; --warn-bg:#fff4dc; --ok:#2f5d50;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#161614; --card:#20201d; --ink:#ecebe6; --muted:#a3a29b; --line:#34332f;
+      --accent:#7fb8a6; --accent-ink:#10201b; --warn:#f0c46b; --warn-bg:#2e2615; --ok:#7fb8a6; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  main{max-width:640px;margin:0 auto;padding:18px 14px 60px}
+  h1{font-size:1.35rem;margin:4px 0 2px}
+  .sub{color:var(--muted);font-size:.9rem;margin:0 0 16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:14px}
+  .step{font-size:.75rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent);margin-bottom:6px}
+  h2{font-size:1.05rem;margin:0 0 8px}
+  p.hint{color:var(--muted);font-size:.85rem;margin:6px 0 0}
+  textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px;
+    font:14px/1.4 ui-monospace,Menlo,Consolas,monospace;background:var(--bg);color:var(--ink);resize:vertical}
+  .file{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .file label.btn{cursor:pointer}
+  /* l'input vero sta sopra il pulsante (trasparente): il tocco arriva direttamente a lui */
+  .pick{position:relative;display:inline-block;overflow:hidden;border-radius:10px}
+  .pick input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:100px}
+  button,.btn{appearance:none;border:0;border-radius:10px;padding:11px 16px;font:600 15px system-ui,sans-serif;
+    background:var(--accent);color:var(--accent-ink);cursor:pointer;display:inline-block}
+  button.ghost,.btn.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+  button:disabled{opacity:.5}
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+  .big{width:100%;padding:14px;font-size:16px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px}
+  .chip{display:flex;align-items:center;gap:6px;border:1px solid var(--line);border-radius:999px;padding:6px 10px;font-size:.85rem;background:var(--bg)}
+  .chip input{accent-color:var(--accent)}
+  .status{font-size:.88rem;color:var(--muted);margin-top:8px;min-height:1.2em}
+  .warn{background:var(--warn-bg);color:var(--warn);border-radius:10px;padding:10px;font-size:.88rem;margin-top:10px}
+  table{width:100%;border-collapse:collapse;font-size:.88rem}
+  td{border-top:1px solid var(--line);padding:6px 4px;vertical-align:top;word-break:break-word}
+  td:first-child{font-family:ui-monospace,Menlo,monospace;color:var(--accent);white-space:nowrap}
+  .hidden{display:none}
+  details summary{cursor:pointer;color:var(--muted);font-size:.9rem}
+  .toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:var(--bg);
+    padding:10px 16px;border-radius:999px;font-size:.9rem;opacity:0;transition:opacity .2s;pointer-events:none}
+  .toast.show{opacity:1}
+</style>
+</head>
+<body>
+<main>
+  <h1>Anonimizzatore</h1>
+  <p class="sub">Toglie i dati personali da un documento prima di condividerlo. Tutto avviene sul telefono: l'app non usa internet.</p>
+
+  <section class="card">
+    <div class="step">Passo 1</div>
+    <h2>Il documento</h2>
+    <div class="file">
+      <div class="pick">
+        <span class="btn">Scegli file (PDF, Word, TXT)</span>
+        <input id="f" type="file" aria-label="Scegli file">
+      </div>
+      <span id="fname" class="hint" style="color:var(--muted);font-size:.85rem"></span>
+    </div>
+    <p class="hint">Oppure incolla direttamente il testo qui sotto.</p>
+    <textarea id="src" rows="7" placeholder="Il testo del documento comparirà qui…"></textarea>
+    <div class="status" id="st1"></div>
+  </section>
+
+  <section class="card">
+    <div class="step">Passo 2</div>
+    <h2>Cosa nascondere</h2>
+    <textarea id="words" rows="5" placeholder="Una voce per riga, es.:
+NOME: Mario Rossi
+INDIRIZZO: Via Roma 12
+Faenza"></textarea>
+    <p class="hint">Una parola o frase per riga. Puoi dare un'etichetta scrivendo <b>ETICHETTA:</b> davanti (in maiuscolo). Maiuscole/minuscole non contano.</p>
+    <div class="row" style="margin-top:8px">
+      <label class="chip"><input type="checkbox" id="remember"> Ricorda queste parole su questo telefono</label>
+    </div>
+    <p class="hint" style="margin-top:12px">Riconosci automaticamente:</p>
+    <div class="chips" id="autos"></div>
+  </section>
+
+  <button class="big" id="go">Anonimizza</button>
+
+  <section class="card hidden" id="outCard" style="margin-top:14px">
+    <div class="step">Risultato</div>
+    <h2>File anonimizzato</h2>
+    <div class="row" id="dlRow" style="margin-top:0">
+      <button id="dlMain" class="big">Salva file anonimo</button>
+      <button id="shMain">Condividi file</button>
+      <button id="shTxt">Condividi come .txt</button>
+      <button id="dlTxt" class="ghost">Salva anche .txt</button>
+      <button id="dlMap" class="ghost">Salva tabella (.json)</button>
+    </div>
+    <p class="hint" id="dlNote"></p>
+    <details style="margin-top:10px">
+      <summary>Anteprima testo</summary>
+      <textarea id="out" rows="10" readonly style="margin-top:8px"></textarea>
+      <div class="row"><button id="copyOut" class="ghost">Copia testo</button></div>
+    </details>
+    <div class="warn">Rileggilo prima di incollarlo: un dato scritto in modo insolito potrebbe essere sfuggito.</div>
+    <div class="status" id="st2"></div>
+    <details style="margin-top:10px" open>
+      <summary>Tabella delle sostituzioni (resta privata)</summary>
+      <table id="map"></table>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="step">Dopo</div>
+    <h2>Rimetti i dati veri</h2>
+    <p class="hint" style="margin-top:0">Incolla una risposta che contiene le etichette (es. [NOME_1]) e le rimetto con i valori originali dell'ultima anonimizzazione.</p>
+    <textarea id="back" rows="5" placeholder="Incolla qui…"></textarea>
+    <div class="row">
+      <button id="restore" class="ghost">Ripristina</button>
+      <button id="copyBack" class="ghost">Copia</button>
+    </div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const AUTO = [
+  {k:"EMAIL", label:"Email", re:/[\w.+-]+@[\w-]+\.[\w.-]+/g},
+  {k:"IBAN", label:"IBAN", re:/\bIT\s?\d{2}\s?[A-Z]\s?(?:\d\s?){10}(?:[0-9A-Z]\s?){11}[0-9A-Z]\b/gi},
+  {k:"CODICE_FISCALE", label:"Codice fiscale", re:/\b[A-Z]{6}\d{2}[A-EHLMPRST]\d{2}[A-Z]\d{3}[A-Z]\b/gi},
+  {k:"CARTA", label:"Carta di credito", re:/\b(?:\d{4}[\s-]?){3}\d{4}\b/g},
+  {k:"PARTITA_IVA", label:"Partita IVA", re:/\b\d{11}\b/g},
+  {k:"TELEFONO", label:"Telefono", re:/(?<![\d\w])(?:\+39[\s.-]?)?(?:3\d{2}|0\d{1,3})[\s.\/-]?\d{3,4}[\s.-]?\d{3,4}(?!\d)/g},
+  {k:"TARGA", label:"Targa", re:/\b[A-Z]{2}\s?\d{3}\s?[A-Z]{2}\b/g},
+  {k:"NUMERO_POLIZZA", label:"N° polizza/contratto", re:/((?:polizza|contratto|pratica|cliente)\s*(?:n\.?|nr\.?|numero|n°|cod\.?|codice)?\s*[:.]?\s*)((?=[A-Z0-9\/-]*\d)[A-Z0-9][A-Z0-9\/-]{4,})/gi, group:true},
+];
+
+// chip automatici
+AUTO.forEach(a => {
+  const l = document.createElement("label"); l.className = "chip";
+  l.innerHTML = `<input type="checkbox" checked data-k="${a.k}"> ${a.label}`;
+  $("autos").appendChild(l);
+});
+
+// memoria locale (facoltativa)
+function store(k, v){ try{ v===null ? localStorage.removeItem(k) : localStorage.setItem(k, v); }catch(e){} }
+function load(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+if (load("anon_words") !== null){ $("words").value = load("anon_words"); $("remember").checked = true; }
+$("remember").addEventListener("change", () => {
+  store("anon_words", $("remember").checked ? $("words").value : null);
+});
+$("words").addEventListener("input", () => { if ($("remember").checked) store("anon_words", $("words").value); });
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),1600); }
+
+// ---------- lettura file ----------
+async function readPdf(buf){
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "lib/pdf.worker.min.js";
+  const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+  const pages = [];
+  for (let i = 1; i <= pdf.numPages; i++){
+    $("st1").textContent = `Leggo pagina ${i} di ${pdf.numPages}…`;
+    const tc = await (await pdf.getPage(i)).getTextContent();
+    let s = "", lastY = null;
+    for (const it of tc.items){
+      const y = it.transform ? it.transform[5] : null;
+      if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) s += "\n";
+      else if (s && !s.endsWith(" ") && !s.endsWith("\n")) s += " ";
+      s += it.str; if (it.hasEOL) s += "\n";
+      lastY = y;
+    }
+    pages.push(s.replace(/[ \t]+\n/g, "\n").replace(/ {2,}/g, " "));
+  }
+  return pages.join("\n\n");
+}
+async function readDocx(buf){
+  const zip = await JSZip.loadAsync(buf);
+  const xml = await zip.file("word/document.xml").async("string");
+  const doc = new DOMParser().parseFromString(xml, "application/xml");
+  const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const out = [];
+  for (const p of doc.getElementsByTagNameNS(W, "p")){
+    let s = "";
+    for (const n of p.getElementsByTagNameNS(W, "*")){
+      if (n.localName === "t") s += n.textContent;
+      else if (n.localName === "tab") s += "\t";
+      else if (n.localName === "br") s += "\n";
+    }
+    out.push(s);
+  }
+  return out.join("\n");
+}
+
+let srcFile = null; // {name, ext, buf}
+$("f").addEventListener("change", e => {
+  const file = e.target.files[0]; if (!file) return;
+  file.arrayBuffer().then(buf => loadBuffer(file.name, buf));
+});
+// chiamata dall'app quando un file arriva da "Condividi" o "Apri con"
+window.loadFromAndroid = (fileName, b64) => {
+  const bin = atob(b64), u8 = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  loadBuffer(fileName, u8.buffer);
+};
+async function loadBuffer(fileName, buf){
+  const file = {name: fileName};
+  $("fname").textContent = file.name;
+  $("st1").textContent = "Leggo il file…";
+  try{
+    const name = file.name.toLowerCase();
+    const ext = name.endsWith(".pdf") ? "pdf" : name.endsWith(".docx") ? "docx" : "txt";
+    srcFile = {name: file.name.replace(/\.[^.]+$/, ""), ext, buf: buf.slice(0)};
+    let text;
+    if (name.endsWith(".pdf")) text = await readPdf(buf);
+    else if (name.endsWith(".docx")) text = await readDocx(buf);
+    else text = new TextDecoder("utf-8").decode(buf);
+    if (!text.trim()){
+      $("st1").innerHTML = "<span style='color:var(--warn)'>Nessun testo trovato: probabilmente è una scansione (immagine). Serve prima l'OCR.</span>";
+    } else {
+      $("st1").textContent = `Letto: ${text.length.toLocaleString("it-IT")} caratteri.`;
+    }
+    $("src").value = text;
+  }catch(err){
+    $("st1").innerHTML = `<span style='color:var(--warn)'>Non riesco a leggere il file (${err.message}). Prova a incollare il testo.</span>`;
+  }
+}
+
+// ---------- anonimizzazione ----------
+let lastMap = {};
+const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function parseWords(txt){
+  const v = [];
+  for (let line of txt.split("\n")){
+    line = line.trim(); if (!line || line.startsWith("#")) continue;
+    const m = line.match(/^([A-ZÀ-Ù_ ]{2,30}):\s*(.+)$/);
+    if (m) v.push([m[1].trim().replace(/\s+/g, "_"), m[2].trim()]);
+    else v.push(["DATO", line]);
+  }
+  return v.sort((a, b) => b[1].length - a[1].length);
+}
+
+function anonymize(text, words, autos){
+  const map = {}, count = {};
+  const tagFor = (label, value) => {
+    const key = value.trim().toLowerCase().replace(/\s+/g, " ");
+    for (const [t, v] of Object.entries(map)) if (v.toLowerCase().replace(/\s+/g, " ") === key) return t;
+    count[label] = (count[label] || 0) + 1;
+    const t = `[${label}_${count[label]}]`; map[t] = value.trim(); return t;
+  };
+  for (const [label, w] of words){
+    const re = new RegExp(w.split(/\s+/).map(esc).join("\\s+"), "gi");
+    text = text.replace(re, () => tagFor(label, w));
+  }
+  for (const a of AUTO){
+    if (!autos.has(a.k)) continue;
+    a.re.lastIndex = 0;
+    text = text.replace(a.re, (m, g1, g2) => {
+      if (m.includes("[") ) return m;               // non toccare segnaposto già messi
+      return a.group ? g1 + tagFor(a.k, g2) : tagFor(a.k, m);
+    });
+  }
+  return {text, map};
+}
+
+$("go").addEventListener("click", () => {
+  const src = $("src").value;
+  if (!src.trim()){ toast("Prima scegli un file o incolla il testo"); return; }
+  const autos = new Set([...document.querySelectorAll("#autos input:checked")].map(i => i.dataset.k));
+  const {text, map} = anonymize(src, parseWords($("words").value), autos);
+  lastMap = map;
+  $("out").value = text;
+  const rows = Object.entries(map);
+  $("map").innerHTML = rows.length
+    ? rows.map(([t, v]) => `<tr><td>${t}</td><td></td></tr>`).join("")
+    : "<tr><td colspan=2>Nessun dato sostituito.</td></tr>";
+  rows.forEach(([, v], i) => { $("map").rows[i].cells[1].textContent = v; });
+  $("st2").textContent = `${rows.length} dati sostituiti.`;
+  updateDlLabels();
+  $("outCard").classList.remove("hidden");
+  $("outCard").scrollIntoView({behavior: "smooth"});
+});
+
+// ---------- creazione file in uscita ----------
+// Riapplica la tabella delle sostituzioni a un pezzo di testo qualsiasi
+function applyMap(text, map){
+  const entries = Object.entries(map).sort((a, b) => b[1].length - a[1].length);
+  for (const [tag, val] of entries){
+    const re = new RegExp(val.split(/\s+/).map(esc).join("\\s+"), "gi");
+    text = text.replace(re, tag);
+  }
+  return text;
+}
+
+async function buildDocx(buf, map){
+  const zip = await JSZip.loadAsync(buf);
+  const W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+  const parts = Object.keys(zip.files).filter(n =>
+    /^word\/(document|header\d*|footer\d*|footnotes|endnotes)\.xml$/.test(n));
+  for (const part of parts){
+    const xml = await zip.file(part).async("string");
+    const doc = new DOMParser().parseFromString(xml, "application/xml");
+    for (const p of doc.getElementsByTagNameNS(W, "p")){
+      const ts = [...p.getElementsByTagNameNS(W, "t")];
+      if (!ts.length) continue;
+      const orig = ts.map(t => t.textContent).join("");
+      const nuovo = applyMap(orig, map);
+      if (nuovo === orig) continue;
+      // il testo cambiato va nel primo pezzo, gli altri si svuotano
+      ts[0].textContent = nuovo;
+      ts[0].setAttributeNS("http://www.w3.org/XML/1998/namespace", "xml:space", "preserve");
+      for (let i = 1; i < ts.length; i++) ts[i].textContent = "";
+    }
+    zip.file(part, new XMLSerializer().serializeToString(doc));
+  }
+  // rimuove autore/ultima modifica dai metadati
+  const core = zip.file("docProps/core.xml");
+  if (core){
+    let c = await core.async("string");
+    c = c.replace(/(<dc:creator>)[^<]*(<\/dc:creator>)/, "$1$2")
+         .replace(/(<cp:lastModifiedBy>)[^<]*(<\/cp:lastModifiedBy>)/, "$1$2");
+    zip.file("docProps/core.xml", c);
+  }
+  return zip.generateAsync({type: "blob",
+    mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"});
+}
+
+function buildPdf(text){
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF({unit: "mm", format: "a4"});
+  const M = 15, W = 210 - 2 * M, H = 297 - M, LH = 4.6;
+  pdf.setFont("helvetica", "normal"); pdf.setFontSize(10);
+  let y = M;
+  for (const line of pdf.splitTextToSize(text.replace(/\t/g, "    "), W)){
+    if (y > H){ pdf.addPage(); y = M; }
+    pdf.text(line, M, y); y += LH;
+  }
+  return pdf.output("blob");
+}
+
+// ---------- salvataggio / condivisione tramite l'app Android ----------
+const MIME = {pdf:"application/pdf", txt:"text/plain", json:"application/json",
+  docx:"application/vnd.openxmlformats-officedocument.wordprocessingml.document"};
+const mimeOf = n => MIME[n.split(".").pop().toLowerCase()] || "application/octet-stream";
+
+async function toB64(data){
+  const blob = data instanceof Blob ? data : new Blob([data]);
+  const url = await new Promise((ok, ko) => {
+    const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = ko; r.readAsDataURL(blob);
+  });
+  return url.slice(url.indexOf(",") + 1);
+}
+async function saveFile(filename, data){
+  if (window.Android){
+    const err = window.Android.saveFile(filename, mimeOf(filename), await toB64(data));
+    if (err) toast("Salvataggio non riuscito: " + err);
+    return;
+  }
+  const blob = data instanceof Blob ? data : new Blob([data], {type: "text/plain"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+async function shareFile(filename, data){
+  if (!window.Android){ toast("Condivisione disponibile solo nell'app"); return; }
+  const err = window.Android.shareFile(filename, mimeOf(filename), await toB64(data));
+  if (err) toast("Condivisione non riuscita: " + err);
+}
+async function buildMain(){
+  const ext = mainExt();
+  if (ext === "pdf") return buildPdf($("out").value);
+  if (ext === "docx") return buildDocx(srcFile.buf.slice(0), lastMap);
+  return $("out").value;
+}
+
+const baseName = () => (srcFile ? srcFile.name : "documento") + "_anonimo";
+function mainExt(){ return srcFile ? srcFile.ext : "txt"; }
+
+function updateDlLabels(){
+  const ext = mainExt();
+  $("dlMain").textContent = `Salva ${baseName()}.${ext}`;
+  $("dlTxt").style.display = $("shTxt").style.display = ext === "txt" ? "none" : "";
+  $("dlNote").textContent = ext === "pdf"
+    ? "Il PDF viene ricreato con solo il testo: la grafica dell'originale (loghi, tabelle, colori) non c'è."
+    : ext === "docx"
+    ? "Il Word mantiene la formattazione; nei paragrafi modificati può perdersi qualche grassetto o corsivo."
+    : "";
+}
+
+$("dlMain").addEventListener("click", async () => {
+  try{ await saveFile(`${baseName()}.${mainExt()}`, await buildMain()); }
+  catch(err){ toast("Errore nel creare il file: " + err.message); }
+});
+$("shMain").addEventListener("click", async () => {
+  try{ await shareFile(`${baseName()}.${mainExt()}`, await buildMain()); }
+  catch(err){ toast("Errore nel creare il file: " + err.message); }
+});
+$("shTxt").addEventListener("click", () => shareFile(`${baseName()}.txt`, $("out").value));
+$("dlTxt").addEventListener("click", () => saveFile(`${baseName()}.txt`, $("out").value));
+$("dlMap").addEventListener("click", () =>
+  saveFile(`${baseName().replace(/_anonimo$/, "")}_tabella.json`, JSON.stringify(lastMap, null, 2)));
+
+async function copy(txt){
+  try{ await navigator.clipboard.writeText(txt); toast("Copiato"); }
+  catch(e){ toast("Copia non riuscita: tieni premuto sul testo e copia a mano"); }
+}
+$("copyOut").addEventListener("click", () => copy($("out").value));
+$("copyBack").addEventListener("click", () => copy($("back").value));
+$("restore").addEventListener("click", () => {
+  if (!Object.keys(lastMap).length){ toast("Prima anonimizza un documento"); return; }
+  let t = $("back").value;
+  for (const [tag, v] of Object.entries(lastMap)) t = t.split(tag).join(v);
+  $("back").value = t; toast("Dati ripristinati");
+});
+</script>
+</body>
+</html>
